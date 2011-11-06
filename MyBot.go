@@ -1,9 +1,10 @@
 package main
 
 import (
-	"os"
-	"math"
 	"container/list"
+	"log"
+	"math"
+	"os"
 )
 
 type GarboAnt struct {
@@ -21,12 +22,12 @@ func NewBot(s *State) Bot {
 
 func (me *GarboAnt) FindPath(s *State, source Location, target Location) (Direction, bool) {
 	type Node struct {
-		current Location;
-		startDir Direction;
+		current Location
+		startDir Direction
 	}
 	
 	if (source == target) {
-		return North, false;
+		return North, false
 	}
 	
 	// BFS
@@ -37,29 +38,31 @@ func (me *GarboAnt) FindPath(s *State, source Location, target Location) (Direct
 		dirs := []Direction{North, East, South, West}
 		for _, i := range dirs {
 			loc := s.Map.Move(current, dirs[i])
-			if (s.Map.SafeDestination(loc)) {
+			if (s.Map.SafeDestination(loc) && !visited[loc]) {
 				startDir := dirs[i];
 				if oldNode != nil {
 					startDir = oldNode.startDir
 				}
-				queue.PushBack(&Node{current: source, startDir: startDir})
+				queue.PushBack(&Node{current: loc, startDir: startDir})
 			}
 		}		
 	}
 
-	nextStep(source, nil);
-	
+	visited[source] = true
+	nextStep(source, nil)
+
 	for queue.Len() != 0 {
 		curEl := queue.Front()
 		queue.Remove(curEl)
-		current := curEl.Value.(Node)
+		current := curEl.Value.(*Node)
 		if current.current == target {
 			return current.startDir, true
 		}
 		if visited[current.current] {
 			continue;
 		}
-		nextStep(current.current, &current)
+		visited[current.current] = true
+		nextStep(current.current, current)
 	}
 
 	return North, false
@@ -73,12 +76,12 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		huntingFood bool
 	}
 	
-	myAnts := []AntState{}
+	myAnts := []*AntState{}
 	for loc, ant := range s.Map.Ants {
 		if ant != MY_ANT {
 			continue
 		}
-		myAnts = append(myAnts, AntState{ loc : loc, })
+		myAnts = append(myAnts, &AntState{ loc: loc, huntingFood: false,})
 	}
 	
 	// Mark the spots we can see as visible, check for food
@@ -89,12 +92,14 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 			
 			if s.Map.Food[loc] {
 				me.knownFood[loc] = ant.loc
-				ant.closestFood = loc
-				ant.huntingFood = true
+				if !ant.huntingFood {
+					ant.closestFood = loc
+					ant.huntingFood = true
+				}
 			}
 		});
 	}
-
+	
 	// Reduce the visibility
 	for row := 0; row < s.Map.Rows; row++ {
 		for col := 0; col < s.Map.Cols; col++ {
@@ -103,20 +108,30 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		}
 	}
 	
+	safeMove := func(loc Location, dir Direction) bool {
+		target := s.Map.Move(loc, dir)
+		if (s.Map.SafeDestination(target)) {
+			s.IssueOrderLoc(loc, dir)
+			return true
+		}
+		return false
+	}
+
 	// Priorities:
 	// 1. Get food
 	// 2. Explore
-	
 	for _, ant := range myAnts {
 		if ant.huntingFood {
+			log.Println(ant.loc, " hunting ", ant.closestFood)
 			// Move towards the food
 			targetDir, valid := me.FindPath(s, ant.loc, ant.closestFood)
+			log.Println(targetDir, ",", valid)
 			if (valid) {
-				s.IssueOrderLoc(ant.loc, targetDir)
+				safeMove(ant.loc, targetDir)
 			}
 		} else {
 			// Explore
-			
+			safeMove(ant.loc, North)
 		}
 	}
 	
