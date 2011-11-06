@@ -2,42 +2,41 @@ package main
 
 import (
 	"os"
-	"rand"
 )
 
-type MyBot struct {
-
+type GarboAnt struct {
+	visited map[Location]bool
+//	curDir Direction
 }
 
-//NewBot creates a new instance of your bot
 func NewBot(s *State) Bot {
-	mb := &MyBot{
-	//do any necessary initialization here
+	me := &GarboAnt{
+		visited: make(map[Location]bool),
 	}
-	return mb
+	return me
 }
 
 //DoTurn is where you should do your bot's actual work.
-func (mb *MyBot) DoTurn(s *State) os.Error {
+func (me *GarboAnt) DoTurn(s *State) os.Error {
 	dirs := []Direction{North, East, South, West}
 	for loc, ant := range s.Map.Ants {
 		if ant != MY_ANT {
 			continue
 		}
 
-		//try each direction in a random order
-		p := rand.Perm(4)
-		for _, i := range p {
-			d := dirs[i]
-
-			loc2 := s.Map.Move(loc, d)
+		for _, i := range dirs {
+			loc2 := s.Map.Move(loc, dirs[i])
+			if me.visited[loc2] {
+				continue
+		  }
 			if s.Map.SafeDestination(loc2) {
-				s.IssueOrderLoc(loc, d)
-				//there's also an s.IssueOrderRowCol if you don't have a Location handy
+				me.visited[loc2] = true
+				s.IssueOrderLoc(loc, dirs[i])
 				break
 			}
 		}
 	}
+	
 	//returning an error will halt the whole program!
 	return nil
 }
