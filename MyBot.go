@@ -20,16 +20,12 @@ func NewBot(s *State) Bot {
 	return me
 }
 
-func (me *GarboAnt) FindPath(s *State, source Location, target Location) (Direction, bool) {
+func (me *GarboAnt) SearchMap(s *State, source Location, isFinalState func(current Location) bool) (Direction, bool) {
 	type Node struct {
 		current Location
 		startDir Direction
 	}
-	
-	if (source == target) {
-		return North, false
-	}
-	
+
 	// BFS
 	visited := make(map[Location]bool)
 	queue := new(list.List)
@@ -55,7 +51,7 @@ func (me *GarboAnt) FindPath(s *State, source Location, target Location) (Direct
 		curEl := queue.Front()
 		queue.Remove(curEl)
 		current := curEl.Value.(*Node)
-		if current.current == target {
+		if isFinalState(current.current) {
 			return current.startDir, true
 		}
 		if visited[current.current] {
@@ -84,6 +80,14 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		myAnts = append(myAnts, &AntState{ loc: loc, huntingFood: false,})
 	}
 	
+	// Reduce the visibility
+	for row := 0; row < s.Map.Rows; row++ {
+		for col := 0; col < s.Map.Cols; col++ {
+			loc := s.Map.FromRowCol(row, col)
+			me.visible[loc] = math.Fmax(0, me.visible[loc] - 0.01)
+		}
+	}
+
 	// Mark the spots we can see as visible, check for food
 	for _, ant := range myAnts {
 		closest := 9999999
@@ -94,7 +98,7 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 			
 			if s.Map.Food[loc] {
 				me.knownFood[loc] = ant.loc
-				
+
 				distance := (fRow-row)*(fRow-row)+(fCol-col)*(fCol-col);
 				if distance < closest {
 					closest = distance
@@ -103,14 +107,6 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 				}
 			}
 		});
-	}
-	
-	// Reduce the visibility
-	for row := 0; row < s.Map.Rows; row++ {
-		for col := 0; col < s.Map.Cols; col++ {
-			loc := s.Map.FromRowCol(row, col)
-			me.visible[loc] = math.Fmax(0, me.visible[loc] - 0.01)
-		}
 	}
 	
 	safeMove := func(loc Location, dir Direction) bool {
@@ -127,19 +123,27 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 	// 2. Explore
 	for _, ant := range myAnts {
 		if ant.huntingFood {
-			log.Println(ant.loc, " hunting ", ant.closestFood)
 			// Move towards the food
-			targetDir, valid := me.FindPath(s, ant.loc, ant.closestFood)
-			log.Println(targetDir, ",", valid)
+			finalState := func(current Location) bool {
+				return current == ant.closestFood
+			}
+			targetDir, valid := me.SearchMap(s, ant.loc, finalState)
 			if (valid) {
 				safeMove(ant.loc, targetDir)
 			}
 		} else {
 			// Explore
-			safeMove(ant.loc, North)
+			finalState := func(current Location) bool {
+				return me.visible[current] != 1.0
+			}
+			targetDir, valid := me.SearchMap(s, ant.loc, finalState)
+			if (valid) {
+				safeMove(ant.loc, targetDir)
+			}
 		}
 	}
 	
+	log.Println("Finished turn in ms")
 	//returning an error will halt the whole program!
 	return nil
 }
