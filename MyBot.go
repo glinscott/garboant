@@ -9,13 +9,11 @@ import (
 
 type GarboAnt struct {
 	visible map[Location]float64
-	knownFood map[Location]Location
 }
 
 func NewBot(s *State) Bot {
 	me := &GarboAnt{
 		visible: make(map[Location]float64),
-		knownFood: make(map[Location]Location),
 	}
 	return me
 }
@@ -97,8 +95,6 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 			me.visible[loc] = 1.0
 			
 			if s.Map.Food[loc] {
-				me.knownFood[loc] = ant.loc
-
 				distance := (fRow-row)*(fRow-row)+(fCol-col)*(fCol-col);
 				if distance < closest {
 					closest = distance
