@@ -86,13 +86,18 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 	
 	// Mark the spots we can see as visible, check for food
 	for _, ant := range myAnts {
+		closest := 9999999
+		fRow, fCol := s.Map.FromLocation(ant.loc)
 		s.Map.DoInRad(ant.loc, s.ViewRadius2, func(row, col int) {
 			loc := s.Map.FromRowCol(row, col)
 			me.visible[loc] = 1.0
 			
 			if s.Map.Food[loc] {
 				me.knownFood[loc] = ant.loc
-				if !ant.huntingFood {
+				
+				distance := (fRow-row)*(fRow-row)+(fCol-col)*(fCol-col);
+				if distance < closest {
+					closest = distance
 					ant.closestFood = loc
 					ant.huntingFood = true
 				}
