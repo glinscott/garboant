@@ -135,22 +135,6 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		}
 	}
 	
-	
-/*	
-		dirs := []Direction{North, East, South, West}
-		for _, i := range dirs {
-			loc2 := s.Map.Move(loc, dirs[i])
-			if me.visited[loc2] {
-				continue
-		  }
-			if s.Map.SafeDestination(loc2) {
-				me.visited[loc2] = true
-				s.IssueOrderLoc(loc, dirs[i])
-				break
-			}
-		}
-	}*/
-	
 	//returning an error will halt the whole program!
 	return nil
 }
