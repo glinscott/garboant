@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"rand"
 	"time"
 )
 
@@ -28,6 +29,7 @@ type GarboAnt struct {
 	visible 		map[Location]float64
 	ants				map[Location]*Ant
 	exploreDir	Direction
+	rand				rand.Rand
 }
 
 func NewBot(s *State) Bot {
@@ -47,7 +49,7 @@ func (me *GarboAnt) SearchMap(s *State, source Location, isFinalState func(curre
 	// BFS
 	visited := make(map[Location]bool)
 	queue := new(list.List)
-	
+
 	nextStep := func(current Location, oldNode *Node) {
 		dirs := []Direction{West, South, North, East}
 		for _, i := range dirs {
@@ -177,15 +179,35 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 			if valid {
 				safeMove(ant.loc, targetDir)
 			} else {
-				ant.state = STATE_EXPLORE;
+				ant.state = STATE_EXPLORE
 			}			
 		}
 	}
-	
+
 	for _, ant := range me.ants {
 		if ant.state == STATE_EXPLORE {
 			if !safeMove(ant.loc, ant.exploreDir) {
-				ant.exploreDir = (ant.exploreDir + 1) % 4
+				targetLoc := ant.loc
+				bestVisible := 2.0
+				
+				for i := 0; i < 10; i++ {
+					loc := Location(rand.Intn(s.Map.Rows * s.Map.Cols));
+					if me.visible[loc] < bestVisible {
+						bestVisible = me.visible[loc]
+						targetLoc = loc
+					}
+				};
+
+				finalState := func(current Location) bool {
+					return current == targetLoc
+				}
+				targetDir, valid := me.SearchMap(s, ant.loc, finalState)
+				if valid {
+					ant.exploreDir = targetDir
+				} else {
+					log.Println("Unable to find target!")
+					ant.exploreDir = (targetDir + 1) % 4;
+				}
 				safeMove(ant.loc, ant.exploreDir)
 			}
 		}
