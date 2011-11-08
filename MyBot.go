@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"time"
 )
 
 type AntState int8
@@ -20,11 +21,13 @@ type Ant struct {
 	closestFood 	Location
 	state 				AntState
 	seenThisTurn 	bool
+	exploreDir		Direction
 }
 
 type GarboAnt struct {
-	visible map[Location]float64
-	ants map[Location]*Ant
+	visible 		map[Location]float64
+	ants				map[Location]*Ant
+	exploreDir	Direction
 }
 
 func NewBot(s *State) Bot {
@@ -46,10 +49,10 @@ func (me *GarboAnt) SearchMap(s *State, source Location, isFinalState func(curre
 	queue := new(list.List)
 	
 	nextStep := func(current Location, oldNode *Node) {
-		dirs := []Direction{North, East, South, West}
+		dirs := []Direction{West, South, North, East}
 		for _, i := range dirs {
 			loc := s.Map.Move(current, dirs[i])
-			if (s.Map.SafeDestination(loc) && !visited[loc]) {
+			if s.Map.SafeDestination(loc) && !visited[loc] {
 				startDir := dirs[i];
 				if oldNode != nil {
 					startDir = oldNode.startDir
@@ -81,6 +84,8 @@ func (me *GarboAnt) SearchMap(s *State, source Location, isFinalState func(curre
 
 //DoTurn is where you should do your bot's actual work.
 func (me *GarboAnt) DoTurn(s *State) os.Error {
+	startTime := time.Nanoseconds();
+	
 	// Mark all ants as not seen so far
 	for _, ant := range me.ants {
 		ant.seenThisTurn = false
@@ -93,8 +98,10 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		}
 	 	_, exists := me.ants[loc]
 		if !exists {
-			me.ants[loc] = &Ant{ state: STATE_EXPLORE, }
+			me.ants[loc] = &Ant{ state: STATE_EXPLORE, exploreDir: me.exploreDir}
 			me.ants[loc].loc = loc
+			
+			me.exploreDir = (me.exploreDir + 1) % 4;
 		} else {
 			if me.ants[loc].loc != loc {
 				log.Println("Ant state corrupted")
@@ -122,7 +129,7 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 	movesMade := []*Ant{}
 	safeMove := func(loc Location, dir Direction) bool {
 		target := s.Map.Move(loc, dir)
-		if (s.Map.SafeDestination(target)) {
+		if s.Map.SafeDestination(target) {
 			me.ants[loc].target = target;
 			movesMade = append(movesMade, me.ants[loc])
 
@@ -142,7 +149,7 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 	
 	// Idle or exploring ants will hunt for food if they find any
 	for _, ant := range me.ants {
-		if (ant.state == STATE_IDLE || ant.state == STATE_EXPLORE) {
+		if ant.state == STATE_IDLE || ant.state == STATE_EXPLORE {
 			closest := 999999999
 			fRow, fCol := s.Map.FromLocation(ant.loc)
 			s.Map.DoInRad(ant.loc, s.ViewRadius2, func(row, col int) {
@@ -161,13 +168,13 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 
 	// Hunting for food now, as we may have switched other ants into this state
 	for _, ant := range me.ants {
-		if (ant.state == STATE_HUNT_FOOD) {
+		if ant.state == STATE_HUNT_FOOD {
 			// Move towards the food
 			finalState := func(current Location) bool {
 				return current == ant.closestFood
 			}
 			targetDir, valid := me.SearchMap(s, ant.loc, finalState)
-			if (valid) {
+			if valid {
 				safeMove(ant.loc, targetDir)
 			} else {
 				ant.state = STATE_EXPLORE;
@@ -176,18 +183,14 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 	}
 	
 	for _, ant := range me.ants {
-		if (ant.state == STATE_EXPLORE) {
-			// Explore
-			finalState := func(current Location) bool {
-				return me.visible[current] != 1.0
-			}
-			targetDir, valid := me.SearchMap(s, ant.loc, finalState)
-			if (valid) {
-				safeMove(ant.loc, targetDir)
+		if ant.state == STATE_EXPLORE {
+			if !safeMove(ant.loc, ant.exploreDir) {
+				ant.exploreDir = (ant.exploreDir + 1) % 4
+				safeMove(ant.loc, ant.exploreDir)
 			}
 		}
 	}
-	
+
 	// Go through all the moves, and update the ant states
 	for _, ant := range movesMade {
 		me.ants[ant.target] = me.ants[ant.loc]
@@ -195,7 +198,7 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		ant.loc = ant.target;
 	}
 	
-	log.Println("Finished turn in ms")
+	log.Println("Finished turn in ", (time.Nanoseconds() - startTime) / 1000000.0 ," ms")
 	//returning an error will halt the whole program!
 	return nil
 }
