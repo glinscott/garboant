@@ -112,7 +112,7 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		} else {
 			if me.ants[loc].loc != loc {
 				log.Println("Ant state corrupted")
-			}
+			}			
 		}
 		me.ants[loc].seenThisTurn = true
 	}
@@ -137,33 +137,25 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 	}
 	
 	// Run the diffusion
-	for steps := 0; steps < 10; steps++ {
+	for steps := 0; steps < 20; steps++ {
 		for row := 0; row < s.Map.Rows; row++ {
 			for col := 0; col < s.Map.Cols; col++ {
 				loc := s.Map.FromRowCol(row, col)
 				next := float32(0.0)
-				if (s.Map.Item(loc) != WATER) {
+				if s.Map.Item(loc) != WATER {
 					for dir := Direction(0); dir < 4; dir++ {
 						loc2 := s.Map.Move(loc, dir)
-						next += me.exploreHeat[loc2]
+						if s.Map.Item(loc2) != WATER {
+							next += me.exploreHeat[loc2] * 0.23
+						}
 					}
 				}
-				me.exploreNext[loc] = next * 0.18
+				me.exploreNext[loc] = next
 			}
 		}
 		me.exploreNext, me.exploreHeat = me.exploreHeat, me.exploreNext
 	}
 
-/*	
-	str := ""
-	for row := 0; row < s.Map.Rows; row++ {
-		for col := 0; col < s.Map.Cols; col++ {
-			str += fmt.Sprintf( "%.1f,", me.exploreHeat[s.Map.FromRowCol(row, col)] / 1000 )
-		}
-		str += "\n"
-	}
-	log.Println(str)
-*/	
 	// Track all the safe moves made
 	movesMade := []*Ant{}
 	safeMove := func(loc Location, dir Direction) bool {
