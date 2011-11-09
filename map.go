@@ -77,6 +77,11 @@ func (o Item) IsHill() bool {
 	return false
 }
 
+func (o Item) IsEnemyHill() bool {
+	return (o > MY_OCCUPIED_HILL && o <= OCCUPIED_HILL_9) ||
+	 			 (o > MY_HILL && o <= HILL_9);
+}
+
 
 //Player returns the player number of the given ant/hill (0 - 9)
 func (o Item) Player() int {

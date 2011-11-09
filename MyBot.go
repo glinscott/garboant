@@ -34,13 +34,14 @@ type GarboAnt struct {
 	exploreHeat   *[MAX_SIZE*MAX_SIZE]float32
 	exploreNext		*[MAX_SIZE*MAX_SIZE]float32
 	ants					map[Location]*Ant
+	knownHills		map[Location]bool
 	rand					rand.Rand
-	exploreDir		Direction
 }
 
 func NewBot(s *State) Bot {
 	me := &GarboAnt{
 		ants: make(map[Location]*Ant),
+		knownHills: make(map[Location]bool),
 	}
 	me.exploreHeat = &me.exploreHeat1;
 	me.exploreNext = &me.exploreHeat2;
@@ -129,9 +130,25 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 	for row := 0; row < s.Map.Rows; row++ {
 		for col := 0; col < s.Map.Cols; col++ {
 			loc := s.Map.FromRowCol(row, col)
-			switch s.Map.Item(loc) {
-			case UNKNOWN: me.exploreHeat[loc] = 9999999
+			item := s.Map.Item(loc)
+			
+			// Track hills
+			if item.IsEnemyHill() {
+				me.knownHills[loc] = true
+			} else {
+				_, isHill := me.knownHills[loc]
+				if isHill {
+				// Handle hills being killed
+					log.Println("Hill killed!")
+					me.knownHills[loc] = false, false
+				}
+			}
+
+			switch item {
+			case UNKNOWN: me.exploreHeat[loc] = 9999
 			case WATER: me.exploreHeat[loc] = 0
+			case MY_HILL: me.exploreHeat[loc] = 0
+			case MY_OCCUPIED_HILL: me.exploreHeat[loc] = 0
 			}
 		}
 	}
@@ -146,7 +163,7 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 					for dir := Direction(0); dir < 4; dir++ {
 						loc2 := s.Map.Move(loc, dir)
 						if s.Map.Item(loc2) != WATER {
-							next += me.exploreHeat[loc2] * 0.23
+							next += me.exploreHeat[loc2] * 0.22
 						}
 					}
 				}
@@ -155,7 +172,16 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		}
 		me.exploreNext, me.exploreHeat = me.exploreHeat, me.exploreNext
 	}
-
+/*
+	str := ""
+	for row := 0; row < s.Map.Rows; row++ {
+	    for col := 0; col < s.Map.Cols; col++ {
+	        str += fmt.Sprintf( "%.1f,", me.exploreHeat[s.Map.FromRowCol(row, col)] / 1000 )
+	    }
+	    str += "\n"
+	}
+	log.Println(str)
+*/
 	// Track all the safe moves made
 	movesMade := []*Ant{}
 	safeMove := func(loc Location, dir Direction) bool {
@@ -178,6 +204,9 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		// Idle or exploring ants will hunt for food if they find any
 		if ant.state == STATE_IDLE || ant.state == STATE_EXPLORE {
 			closest := 999999999
+			bestHeat := float32(0.0)
+			heatLoc := ant.loc
+			
 			fRow, fCol := s.Map.FromLocation(ant.loc)
 			s.Map.DoInRad(ant.loc, s.ViewRadius2, func(row, col int) {
 				loc := s.Map.FromRowCol(row, col)
@@ -189,7 +218,21 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 						ant.state = STATE_HUNT_FOOD
 					}
 				}
+				if me.exploreHeat[loc] > bestHeat {
+					bestHeat = me.exploreHeat[loc]
+					heatLoc = loc
+				}
 			})
+			
+			if (ant.state == STATE_EXPLORE && heatLoc != ant.loc) {
+				finalState := func(current Location) bool {
+					return current == heatLoc
+				}
+				targetDir, valid := me.SearchMap(s, ant.loc, finalState)
+				if valid {
+					safeMove(ant.loc, targetDir)
+				}				
+			}
 		}
 	}
 
@@ -208,24 +251,6 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 			}			
 		}
 	}
-
-	for _, ant := range me.ants {
-		if ant.state == STATE_EXPLORE {
-			// Find the best exploreHeat
-			bestDir := me.exploreDir
-			bestHeat := float32(0.0)
-			for dir := Direction(0); dir < 4; dir++ {
-				target := s.Map.Move(ant.loc, dir)
-				if (me.exploreHeat[target] > bestHeat) {
-					bestHeat = me.exploreHeat[target]
-					bestDir = dir
-				}
-			}
-			safeMove(ant.loc, bestDir)
-		}
-	}
-
-	me.exploreDir = (me.exploreDir + 1) % 4
 
 	// Go through all the moves, and update the ant states
 	for _, ant := range movesMade {
