@@ -22,6 +22,10 @@ type Ant struct {
 	closestFood 	Location
 	state 				AntState
 	seenThisTurn 	bool
+	
+	// BFS move state
+	moves					*list.List
+	moveTarget		Location
 }
 
 const (
@@ -48,48 +52,76 @@ func NewBot(s *State) Bot {
 	return me
 }
 
-func (me *GarboAnt) SearchMap(s *State, source Location, isFinalState func(current Location) bool) (Direction, bool) {
+func (me *GarboAnt) SearchMap(s *State, source Location, final Location) (*list.List, bool) {
+	if (source == final) {
+		return nil, false
+	}
+
 	type Node struct {
 		current Location
-		startDir Direction
+		wave int
 	}
 
 	// BFS
-	visited := make(map[Location]bool)
+	visited := make(map[Location]int)
 	queue := new(list.List)
 
+	dirs := []Direction{West, South, North, East}
+	invDir := []Direction{East, North, South, West}
 	nextStep := func(current Location, oldNode *Node) {
-		dirs := []Direction{West, South, North, East}
 		for _, i := range dirs {
 			loc := s.Map.Move(current, dirs[i])
-			if s.Map.SafeDestination(loc) && !visited[loc] {
-				startDir := dirs[i];
+			_, exists := visited[loc]
+			if s.Map.SafeDestination(loc) && !exists {
+				wave := 1
 				if oldNode != nil {
-					startDir = oldNode.startDir
+					wave = oldNode.wave + 1
 				}
-				queue.PushBack(&Node{current: loc, startDir: startDir})
+				queue.PushBack(&Node{current: loc, wave: wave, })
 			}
 		}		
 	}
+	
+	buildPath := func(end Location) *list.List {
+		path := new(list.List)
+		for end != source {
+			bestWave := 9999999;
+			bestDir := North
+			bestLoc := Location(0)
+			for _, i := range dirs {
+				loc := s.Map.Move(end, dirs[i])
+				_, exists := visited[loc]
+				if exists && visited[loc] < bestWave {
+					bestWave = visited[loc]
+					bestDir = invDir[i]
+					bestLoc = loc
+				}
+			}
+			path.PushFront(bestDir)
+			end = bestLoc
+		}
+		return path
+	}
 
-	visited[source] = true
+	visited[source] = 0
 	nextStep(source, nil)
 
 	for queue.Len() != 0 {
 		curEl := queue.Front()
 		queue.Remove(curEl)
 		current := curEl.Value.(*Node)
-		if isFinalState(current.current) {
-			return current.startDir, true
+		if current.current == final {
+			// Walk back from here, constructing the path
+			return buildPath(current.current), true
 		}
-		if visited[current.current] {
+		if _, exists := visited[current.current]; exists {
 			continue;
 		}
-		visited[current.current] = true
+		visited[current.current] = current.wave
 		nextStep(current.current, current)
 	}
 
-	return North, false
+	return nil, false
 }
 
 //DoTurn is where you should do your bot's actual work.
@@ -138,7 +170,7 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 			} else {
 				_, isHill := me.knownHills[loc]
 				if isHill {
-				// Handle hills being killed
+					// Handle hills being killed
 					log.Println("Hill killed!")
 					me.knownHills[loc] = false, false
 				}
@@ -195,7 +227,29 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		}
 		return false
 	}
-	
+
+	nextBFSMove := func(ant *Ant, target Location, retargetNow bool) bool {
+		if ant.moves == nil || (ant.moveTarget != target && retargetNow) {
+			// Rebuild the path
+			moves, valid := me.SearchMap(s, ant.loc, target)
+			if valid {
+				ant.moves = moves
+				ant.moveTarget = target
+			} else {
+				log.Println("Unable to find path!")
+				return false
+			}			
+		}
+
+		// Move along the move path
+		front := ant.moves.Front()
+		ant.moves.Remove(front)
+		if (ant.moves.Len() == 0) {
+			ant.moves = nil
+		}
+		return safeMove(ant.loc, front.Value.(Direction))
+	}
+
 	for _, ant := range me.ants {
 		// If we are hunting food, but it has disappeared, switch back to exploring
 		if ant.state == STATE_HUNT_FOOD && s.Map.Item(ant.closestFood) != FOOD {
@@ -224,14 +278,8 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 				}
 			})
 			
-			if (ant.state == STATE_EXPLORE && heatLoc != ant.loc) {
-				finalState := func(current Location) bool {
-					return current == heatLoc
-				}
-				targetDir, valid := me.SearchMap(s, ant.loc, finalState)
-				if valid {
-					safeMove(ant.loc, targetDir)
-				}				
+			if (ant.state == STATE_EXPLORE) {
+				nextBFSMove(ant, heatLoc, false)
 			}
 		}
 	}
@@ -240,15 +288,7 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 	for _, ant := range me.ants {
 		if ant.state == STATE_HUNT_FOOD {
 			// Move towards the food
-			finalState := func(current Location) bool {
-				return current == ant.closestFood
-			}
-			targetDir, valid := me.SearchMap(s, ant.loc, finalState)
-			if valid {
-				safeMove(ant.loc, targetDir)
-			} else {
-				ant.state = STATE_EXPLORE
-			}			
+			nextBFSMove(ant, ant.closestFood, true);
 		}
 	}
 
