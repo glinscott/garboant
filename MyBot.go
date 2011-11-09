@@ -2,8 +2,8 @@ package main
 
 import (
 	"container/list"
+	"fmt"
 	"log"
-	"math"
 	"os"
 	"rand"
 	"time"
@@ -22,21 +22,28 @@ type Ant struct {
 	closestFood 	Location
 	state 				AntState
 	seenThisTurn 	bool
-	exploreDir		Direction
 }
 
+const (
+	MAX_SIZE = 200
+)
+
 type GarboAnt struct {
-	visible 		map[Location]float64
-	ants				map[Location]*Ant
-	exploreDir	Direction
-	rand				rand.Rand
+	exploreHeat1	[MAX_SIZE*MAX_SIZE]float32
+	exploreHeat2	[MAX_SIZE*MAX_SIZE]float32
+	exploreHeat   *[MAX_SIZE*MAX_SIZE]float32
+	exploreNext		*[MAX_SIZE*MAX_SIZE]float32
+	ants					map[Location]*Ant
+	rand					rand.Rand
+	exploreDir		Direction
 }
 
 func NewBot(s *State) Bot {
 	me := &GarboAnt{
-		visible: make(map[Location]float64),
 		ants: make(map[Location]*Ant),
 	}
+	me.exploreHeat = &me.exploreHeat1;
+	me.exploreNext = &me.exploreHeat2;
 	return me
 }
 
@@ -100,10 +107,8 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		}
 	 	_, exists := me.ants[loc]
 		if !exists {
-			me.ants[loc] = &Ant{ state: STATE_EXPLORE, exploreDir: me.exploreDir}
+			me.ants[loc] = &Ant{ state: STATE_EXPLORE, }
 			me.ants[loc].loc = loc
-			
-			me.exploreDir = (me.exploreDir + 1) % 4;
 		} else {
 			if me.ants[loc].loc != loc {
 				log.Println("Ant state corrupted")
@@ -120,19 +125,51 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		}
 	}
 	
-	// Reduce the visibility
+	// Anything that can't be seen is highest priority
 	for row := 0; row < s.Map.Rows; row++ {
 		for col := 0; col < s.Map.Cols; col++ {
 			loc := s.Map.FromRowCol(row, col)
-			me.visible[loc] = math.Fmax(0, me.visible[loc] - 0.01)
+			switch s.Map.Item(loc) {
+			case UNKNOWN: me.exploreHeat[loc] = 9999999
+			case WATER: me.exploreHeat[loc] = 0
+			}
 		}
 	}
+	
+	// Run the diffusion
+	for steps := 0; steps < 10; steps++ {
+		for row := 0; row < s.Map.Rows; row++ {
+			for col := 0; col < s.Map.Cols; col++ {
+				loc := s.Map.FromRowCol(row, col)
+				next := float32(0.0)
+				if (s.Map.Item(loc) != WATER) {
+					for dir := Direction(0); dir < 4; dir++ {
+						loc2 := s.Map.Move(loc, dir)
+						next += me.exploreHeat[loc2]
+					}
+				}
+				me.exploreNext[loc] = next * 0.18
+			}
+		}
+		me.exploreNext, me.exploreHeat = me.exploreHeat, me.exploreNext
+	}
 
+/*	
+	str := ""
+	for row := 0; row < s.Map.Rows; row++ {
+		for col := 0; col < s.Map.Cols; col++ {
+			str += fmt.Sprintf( "%.1f,", me.exploreHeat[s.Map.FromRowCol(row, col)] / 1000 )
+		}
+		str += "\n"
+	}
+	log.Println(str)
+*/	
+	// Track all the safe moves made
 	movesMade := []*Ant{}
 	safeMove := func(loc Location, dir Direction) bool {
 		target := s.Map.Move(loc, dir)
 		if s.Map.SafeDestination(target) {
-			me.ants[loc].target = target;
+			me.ants[loc].target = target
 			movesMade = append(movesMade, me.ants[loc])
 
 			s.IssueOrderLoc(loc, dir)
@@ -141,16 +178,12 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		return false
 	}
 	
-	// Anything our ants can currently see doesn't need to be explored, mark it as such
 	for _, ant := range me.ants {
-		s.Map.DoInRad(ant.loc, s.ViewRadius2, func(row, col int) {
-			loc := s.Map.FromRowCol(row, col)
-			me.visible[loc] = 1.0
-		});
-	}
-	
-	// Idle or exploring ants will hunt for food if they find any
-	for _, ant := range me.ants {
+		// If we are hunting food, but it has disappeared, switch back to exploring
+		if ant.state == STATE_HUNT_FOOD && s.Map.Item(ant.closestFood) != FOOD {
+			ant.state = STATE_EXPLORE;
+		}
+		// Idle or exploring ants will hunt for food if they find any
 		if ant.state == STATE_IDLE || ant.state == STATE_EXPLORE {
 			closest := 999999999
 			fRow, fCol := s.Map.FromLocation(ant.loc)
@@ -164,9 +197,9 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 						ant.state = STATE_HUNT_FOOD
 					}
 				}
-			});
+			})
 		}
-	}	
+	}
 
 	// Hunting for food now, as we may have switched other ants into this state
 	for _, ant := range me.ants {
@@ -186,41 +219,30 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 
 	for _, ant := range me.ants {
 		if ant.state == STATE_EXPLORE {
-			if !safeMove(ant.loc, ant.exploreDir) {
-				targetLoc := ant.loc
-				bestVisible := 2.0
-				
-				for i := 0; i < 10; i++ {
-					loc := Location(rand.Intn(s.Map.Rows * s.Map.Cols));
-					if me.visible[loc] < bestVisible {
-						bestVisible = me.visible[loc]
-						targetLoc = loc
-					}
-				};
-
-				finalState := func(current Location) bool {
-					return current == targetLoc
+			// Find the best exploreHeat
+			bestDir := me.exploreDir
+			bestHeat := float32(0.0)
+			for dir := Direction(0); dir < 4; dir++ {
+				target := s.Map.Move(ant.loc, dir)
+				if (me.exploreHeat[target] > bestHeat) {
+					bestHeat = me.exploreHeat[target]
+					bestDir = dir
 				}
-				targetDir, valid := me.SearchMap(s, ant.loc, finalState)
-				if valid {
-					ant.exploreDir = targetDir
-				} else {
-					log.Println("Unable to find target!")
-					ant.exploreDir = (targetDir + 1) % 4;
-				}
-				safeMove(ant.loc, ant.exploreDir)
 			}
+			safeMove(ant.loc, bestDir)
 		}
 	}
+
+	me.exploreDir = (me.exploreDir + 1) % 4
 
 	// Go through all the moves, and update the ant states
 	for _, ant := range movesMade {
 		me.ants[ant.target] = me.ants[ant.loc]
 		me.ants[ant.loc] = nil, false
-		ant.loc = ant.target;
+		ant.loc = ant.target
 	}
 	
-	log.Println("Finished turn in ", (time.Nanoseconds() - startTime) / 1000000.0 ," ms")
+	log.Println(fmt.Sprintf( "Finished turn in %d ms", (time.Nanoseconds() - startTime) / 1000000.0))
 	//returning an error will halt the whole program!
 	return nil
 }
