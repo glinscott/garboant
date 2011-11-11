@@ -11,15 +11,15 @@ import (
 
 type AntState int8
 const (
-	STATE_IDLE = iota
+	STATE_EXPLORE = iota
 	STATE_HUNT_FOOD
-	STATE_EXPLORE
 )
 
 type Ant struct {
 	loc						Location
 	target				Location
 	closestFood 	Location
+	exploreTarget Location
 	state 				AntState
 	seenThisTurn 	bool
 	
@@ -28,28 +28,60 @@ type Ant struct {
 	moveTarget		Location
 }
 
-const (
-	MAX_SIZE = 200
-)
+func (ant *Ant) printMoves() {
+	debugDir := ""
+	for e := ant.moves.Front(); e != nil; e = e.Next() {
+		debugDir += fmt.Sprintf("%s,", e.Value.(Direction))
+	}	
+	log.Println(debugDir)	
+}
+
+const MAX_SIZE = 200
+const AREAS = 12
 
 type GarboAnt struct {
+	state 				*State
+	
 	exploreHeat1	[MAX_SIZE*MAX_SIZE]float32
 	exploreHeat2	[MAX_SIZE*MAX_SIZE]float32
 	exploreHeat   *[MAX_SIZE*MAX_SIZE]float32
 	exploreNext		*[MAX_SIZE*MAX_SIZE]float32
 	ants					map[Location]*Ant
+	foodHunted		map[Location]*Ant
 	knownHills		map[Location]bool
+	knownWater		map[Location]bool
 	rand					rand.Rand
+	
+	antCountArea	[AREAS*AREAS]int
+	areaOffset		int
 }
 
 func NewBot(s *State) Bot {
 	me := &GarboAnt{
 		ants: make(map[Location]*Ant),
 		knownHills: make(map[Location]bool),
+		knownWater: make(map[Location]bool),
+		foodHunted: make(map[Location]*Ant),
+		state: s,
 	}
 	me.exploreHeat = &me.exploreHeat1;
 	me.exploreNext = &me.exploreHeat2;
 	return me
+}
+
+func (me *GarboAnt) locToArea(loc Location) int {
+	row, col := me.state.Map.FromLocation(loc)
+	areaRow := int(float64(row) / float64(me.state.Map.Rows) * AREAS)
+	areaCol := int(float64(col) / float64(me.state.Map.Cols) * AREAS)
+	return areaRow * AREAS + areaCol
+}
+
+func (me *GarboAnt) areaToLoc(loc int) Location {
+	areaRow := loc / AREAS
+	areaCol := loc % AREAS
+	row := int(float64(areaRow) / float64(AREAS) * float64(me.state.Map.Rows))
+	col := int(float64(areaCol) / float64(AREAS) * float64(me.state.Map.Cols))
+	return me.state.Map.FromRowCol(row, col)
 }
 
 func (me *GarboAnt) SearchMap(s *State, source Location, final Location) (*list.List, bool) {
@@ -69,10 +101,12 @@ func (me *GarboAnt) SearchMap(s *State, source Location, final Location) (*list.
 	dirs := []Direction{West, South, North, East}
 	invDir := []Direction{East, North, South, West}
 	nextStep := func(current Location, oldNode *Node) {
-		for _, i := range dirs {
-			loc := s.Map.Move(current, dirs[i])
-			_, exists := visited[loc]
-			if s.Map.SafeDestination(loc) && !exists {
+		for _, dir := range dirs {
+			loc := s.Map.Move(current, dir)
+			_, alreadyVisited := visited[loc]
+			_, waterExists := me.knownWater[loc]
+			_, antExists := false, false //me.ants[loc]
+			if !alreadyVisited && !waterExists && !antExists {
 				wave := 1
 				if oldNode != nil {
 					wave = oldNode.wave + 1
@@ -81,7 +115,7 @@ func (me *GarboAnt) SearchMap(s *State, source Location, final Location) (*list.
 			}
 		}		
 	}
-	
+
 	buildPath := func(end Location) *list.List {
 		path := new(list.List)
 		for end != source {
@@ -132,7 +166,7 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 	for _, ant := range me.ants {
 		ant.seenThisTurn = false
 	}
-
+	
 	// Check to see which ants are alive and in the place we thought they should be
 	for loc, ant := range s.Map.Ants {
 		if ant != MY_ANT {
@@ -140,30 +174,32 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		}
 	 	_, exists := me.ants[loc]
 		if !exists {
-			me.ants[loc] = &Ant{ state: STATE_EXPLORE, }
+			me.ants[loc] = &Ant{ state: STATE_EXPLORE,}
 			me.ants[loc].loc = loc
+			me.antCountArea[me.locToArea(loc)]++;
 		} else {
 			if me.ants[loc].loc != loc {
 				log.Println("Ant state corrupted")
 			}			
 		}
-		me.ants[loc].seenThisTurn = true
+		me.ants[loc].seenThisTurn = true		
 	}
 	
 	for loc, ant := range me.ants {
 		// Remove killed ants from state
 		if !ant.seenThisTurn {
 			me.ants[loc] = nil, false
+			me.antCountArea[me.locToArea(loc)]--;
 			log.Println("Ant killed at ", loc)
 		}
 	}
-	
+
 	// Anything that can't be seen is highest priority
 	for row := 0; row < s.Map.Rows; row++ {
 		for col := 0; col < s.Map.Cols; col++ {
 			loc := s.Map.FromRowCol(row, col)
 			item := s.Map.Item(loc)
-			
+
 			// Track hills
 			if item.IsEnemyHill() {
 				me.knownHills[loc] = true
@@ -175,40 +211,26 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 					me.knownHills[loc] = false, false
 				}
 			}
-
-			switch item {
-			case UNKNOWN: me.exploreHeat[loc] = 9999
-			case WATER: me.exploreHeat[loc] = 0
-			case MY_HILL: me.exploreHeat[loc] = 0
-			case MY_OCCUPIED_HILL: me.exploreHeat[loc] = 0
+			
+			// Track water
+			if item == WATER {
+				me.knownWater[loc] = true
 			}
-		}
-	}
-	
-	// Run the diffusion
-	for steps := 0; steps < 20; steps++ {
-		for row := 0; row < s.Map.Rows; row++ {
-			for col := 0; col < s.Map.Cols; col++ {
-				loc := s.Map.FromRowCol(row, col)
-				next := float32(0.0)
-				if s.Map.Item(loc) != WATER {
-					for dir := Direction(0); dir < 4; dir++ {
-						loc2 := s.Map.Move(loc, dir)
-						if s.Map.Item(loc2) != WATER {
-							next += me.exploreHeat[loc2] * 0.22
-						}
-					}
+			if item != FOOD {
+				me.foodHunted[loc] = nil, false
+			} else {
+				hunter := me.foodHunted[loc]
+				if hunter != nil && !hunter.seenThisTurn {
+					me.foodHunted[loc] = nil, false
 				}
-				me.exploreNext[loc] = next
 			}
 		}
-		me.exploreNext, me.exploreHeat = me.exploreHeat, me.exploreNext
 	}
 /*
 	str := ""
-	for row := 0; row < s.Map.Rows; row++ {
-	    for col := 0; col < s.Map.Cols; col++ {
-	        str += fmt.Sprintf( "%.1f,", me.exploreHeat[s.Map.FromRowCol(row, col)] / 1000 )
+	for row := 0; row < AREAS; row++ {
+	    for col := 0; col < AREAS; col++ {
+	        str += fmt.Sprintf( "%d,", me.antCountArea[row*AREAS+col] )
 	    }
 	    str += "\n"
 	}
@@ -228,58 +250,141 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 		return false
 	}
 
+	rebuildPath := func(ant *Ant, target Location) bool {
+		// Rebuild the path
+		moves, valid := me.SearchMap(s, ant.loc, target)
+		if valid {
+			ant.moves = moves
+			ant.moveTarget = target
+		} else {
+			return false
+		}
+		return true
+	}
+
 	nextBFSMove := func(ant *Ant, target Location, retargetNow bool) bool {
 		if ant.moves == nil || (ant.moveTarget != target && retargetNow) {
-			// Rebuild the path
-			moves, valid := me.SearchMap(s, ant.loc, target)
-			if valid {
-				ant.moves = moves
-				ant.moveTarget = target
-			} else {
-				log.Println("Unable to find path!")
+			if (!rebuildPath(ant, target)) {
 				return false
-			}			
+			}
 		}
 
-		// Move along the move path
+		// Move along the path, if we get stuck, re-path
 		front := ant.moves.Front()
-		ant.moves.Remove(front)
-		if (ant.moves.Len() == 0) {
-			ant.moves = nil
+		dir := front.Value.(Direction)
+		// Check explicitly for water - means we need to rebuild path
+		if me.knownWater[s.Map.Move(ant.loc, dir)] {
+			if (!rebuildPath(ant, target)) {
+				return false
+			}
+			front = ant.moves.Front()
+			dir = front.Value.(Direction)
 		}
-		return safeMove(ant.loc, front.Value.(Direction))
+
+		success := safeMove(ant.loc, dir)
+		if (success) {
+			ant.moves.Remove(front)
+			if (ant.moves.Len() == 0) {
+				ant.moves = nil
+			}
+			return true
+		}
+		
+		// Otherwise, if we fail to move, it's because another ant is in the way
+		return false
 	}
 
 	for _, ant := range me.ants {
 		// If we are hunting food, but it has disappeared, switch back to exploring
 		if ant.state == STATE_HUNT_FOOD && s.Map.Item(ant.closestFood) != FOOD {
-			ant.state = STATE_EXPLORE;
+			ant.state = STATE_EXPLORE
+			me.foodHunted[ant.loc] = nil, false
 		}
-		// Idle or exploring ants will hunt for food if they find any
-		if ant.state == STATE_IDLE || ant.state == STATE_EXPLORE {
-			closest := 999999999
-			bestHeat := float32(0.0)
-			heatLoc := ant.loc
-			
-			fRow, fCol := s.Map.FromLocation(ant.loc)
+		// Exploring ants will hunt for food if they find any
+		if ant.state == STATE_EXPLORE {
+			bestLen := 9999999
 			s.Map.DoInRad(ant.loc, s.ViewRadius2, func(row, col int) {
 				loc := s.Map.FromRowCol(row, col)
 				if s.Map.Food[loc] {
-					distance := (fRow-row)*(fRow-row)+(fCol-col)*(fCol-col);
-					if distance < closest {
-						closest = distance
+					moves, valid := me.SearchMap(s, ant.loc, loc)
+					if valid && moves.Len() < bestLen {
+						bestLen = moves.Len()
+						ant.moves = moves
+						ant.moveTarget = loc
 						ant.closestFood = loc
 						ant.state = STATE_HUNT_FOOD
 					}
 				}
-				if me.exploreHeat[loc] > bestHeat {
-					bestHeat = me.exploreHeat[loc]
-					heatLoc = loc
-				}
 			})
-			
-			if (ant.state == STATE_EXPLORE) {
-				nextBFSMove(ant, heatLoc, false)
+		}
+	}
+	
+	findNewTarget := func(ant *Ant) {
+		wrap := AREAS*AREAS
+		me.areaOffset = (me.areaOffset + 3) % 8
+		
+		// Go to the section with the fewest ants
+/*		bestArea := 0
+		bestCount := 99999
+		areaDirs := [8]int{-1,AREAS,1,-AREAS,AREAS-1,AREAS+1,-AREAS-1,-AREAS+1}
+		me.areaOffset = (me.areaOffset + 3) % 8
+		for i := me.areaOffset; i < me.areaOffset + 8; i++ {
+			actual := me.locToArea(ant.loc) + areaDirs[i % 8]
+			if actual < 0 {
+				actual += wrap
+			} else if actual >= wrap {
+				actual -= wrap
+			}
+			if me.antCountArea[actual] < bestCount {
+				bestCount = me.antCountArea[actual]
+				bestArea = actual
+			}
+		}*/
+		
+/*		me.areaOffset = (me.areaOffset + 47) % wrap
+		for i := 0; i < wrap; i++ {
+			actual := (i + me.areaOffset) % wrap
+			if me.antCountArea[actual] < bestCount {
+				bestCount = me.antCountArea[actual]
+				bestArea = actual
+			}
+		}*/
+		
+		bestArea := rand.Intn(wrap)
+		
+		// Now, path there
+		ant.exploreTarget = me.areaToLoc(bestArea)
+		row, col := s.Map.FromLocation(ant.exploreTarget)
+		w := s.Map.Cols / AREAS
+		h := s.Map.Rows / AREAS
+		row = row + rand.Intn(w) - (w / 2)
+		col = col + rand.Intn(h) - (h / 2)
+		ant.exploreTarget = s.Map.FromRowCol(row, col)
+		for me.knownWater[ant.exploreTarget] {
+			ant.exploreTarget = s.Map.Move(ant.exploreTarget, North)
+			ant.exploreTarget = s.Map.Move(ant.exploreTarget, North)
+			ant.exploreTarget = s.Map.Move(ant.exploreTarget, East)
+		}
+
+		ant.moveTarget = ant.exploreTarget
+	}
+	
+	tryAnyMove := func (ant *Ant) {
+		for dir := Direction(0); dir < 4; dir++ {
+			if (safeMove(ant.loc, dir)) {
+				return
+			}
+		}
+	}
+	
+	for _, ant := range me.ants {
+		if ant.state == STATE_EXPLORE {
+			if ant.moves == nil {
+				findNewTarget(ant)
+			}
+			if !nextBFSMove(ant, ant.moveTarget, false) {
+				findNewTarget(ant)
+				tryAnyMove(ant)
 			}
 		}
 	}
@@ -288,17 +393,22 @@ func (me *GarboAnt) DoTurn(s *State) os.Error {
 	for _, ant := range me.ants {
 		if ant.state == STATE_HUNT_FOOD {
 			// Move towards the food
-			nextBFSMove(ant, ant.closestFood, true);
+			if !nextBFSMove(ant, ant.closestFood, true) {
+				tryAnyMove(ant)
+			}
 		}
 	}
 
 	// Go through all the moves, and update the ant states
 	for _, ant := range movesMade {
+		me.antCountArea[me.locToArea(ant.loc)]--;
+		me.antCountArea[me.locToArea(ant.target)]++;				
+		
 		me.ants[ant.target] = me.ants[ant.loc]
 		me.ants[ant.loc] = nil, false
 		ant.loc = ant.target
 	}
-	
+
 	log.Println(fmt.Sprintf( "Finished turn in %d ms", (time.Nanoseconds() - startTime) / 1000000.0))
 	//returning an error will halt the whole program!
 	return nil
